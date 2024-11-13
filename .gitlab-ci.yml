@@ -1,0 +1,121 @@
+# This file is a template, and might need editing before it works on your project.
+# This is a sample GitLab CI/CD configuration file that should run without any modifications.
+# It demonstrates a basic 3 stage CI/CD pipeline. Instead of real tests or scripts,
+# it uses echo commands to simulate the pipeline execution.
+#
+# A pipeline is composed of independent jobs that run scripts, grouped into stages.
+# Stages run in sequential order, but jobs within stages run in parallel.
+#
+# For more information, see: https://docs.gitlab.com/ee/ci/yaml/index.html#stages
+#
+# You can copy and paste this template into a new `.gitlab-ci.yml` file.
+# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
+#
+# To contribute improvements to CI/CD templates, please follow the Development guide at:
+# https://docs.gitlab.com/ee/development/cicd/templates.html
+# This specific template is located at:
+# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Getting-Started.gitlab-ci.yml
+variables:
+  GLOBAL_VAR: "A global variable"
+  DfdBackendServiceEnvironment: "PPE"
+  GDN_MDC_CLI_TENANT_ID: "dad46ef7-083d-488a-bd4b-8926fc7f83a1"
+  GDN_MDC_CLI_CLIENT_ID: "75dfa409-d524-4c36-837f-c306cef47501"
+  GDN_MDC_CLI_CLIENT_SECRET: "Zct8Q~EiWpqiL8UMmtryDDPbNB6r3OoRWOV2AbS8"
+  GDN_PIPELINENAME: "jenkins"
+  GDN_TRIVY_ACTION: "image"
+  GDN_TRIVY_TARGET: "my_docker_image:$CI_COMMIT_SHA"
+  DOCKER_DRIVER: overlay2 # not sure if this is needed
+  DOCKER_TLS_CERTDIR: "/certs"
+  TIME_STAMP: $(date +%x_%H:%M:%S:%N | sed 's/\(:[0-9][0-9]\)[0-9]*$/\1/')
+
+# image: docker:stable
+
+# services:
+#   - docker:dind
+
+# before_script:
+#   - docker info
+
+stages:          # List of stages for jobs, and their order of execution
+  - build
+  - test
+  - deploy
+
+build-job:       # This job runs in the build stage, which runs first.
+  stage: build
+  image: docker:stable
+  services:
+    - docker:dind
+  script:
+    - echo "Compiling the code..."
+    - echo "Compile complete."
+    - docker build -t my_docker_image:$CI_COMMIT_SHA .
+    # - find . -type f -maxdepth 1
+    # - ls -l /usr/bin | awk '{ print $NF }' 
+    # - docker image ls
+    # - docker image inspect my_docker_image:$CI_COMMIT_SHA
+    - mkdir image
+    - docker save my_docker_image:$CI_COMMIT_SHA > image/my_docker_image:$CI_COMMIT_SHA.tar
+    - echo "${TIME_STAMP}"
+  artifacts: 
+    untracked: true
+    paths: 
+      - image
+
+unit-test-job:   # This job runs in the test stage.
+  stage: test    # It only starts when the job in the build stage completes successfully.
+  script:
+    - echo "Running unit tests... This will take about 60 seconds."
+    - sleep 60
+    - echo "Code coverage is 90%"
+
+msdo-run-job:
+  stage: test
+  dependencies:
+    - build-job
+  before_script:
+    - apk add --update curl && rm -rf /var/cache/apk/*
+    - apk add --no-cache unzip
+  script:
+    # - docker load -i image/my_docker_image:$CI_COMMIT_SHA.tar
+    # - docker image ls
+    - echo "Downloading MSDO"
+    - curl -L -o ./msdo_linux.zip "https://www.nuget.org/api/v2/package/Microsoft.Security.DevOps.Cli.linux-x64/"
+    # - apt-get install -y zip unzip
+    - unzip -o ./msdo_linux.zip
+    - chmod +x tools/guardian
+    - chmod +x tools/Microsoft.Guardian.Cli
+    - ls -lah .
+    - cd tools
+    - echo "find depth 1"
+    - find . -type f -maxdepth 2
+    - echo "$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
+    - ./tools/guardian init --force
+    # - ./Microsoft.Guardian.Cli init --force
+    # - guardian init --force
+    - echo "running guardian"
+    - ./tools/guardian run -t trivy --export-file ./ubuntu-test.sarif --publish-file-folder-path ./ubuntu-test.sarif  --not-break-on-detections
+    # - ./Microsoft.Guardian.Cli run -t trivy --export-file ./ubuntu-test.sarif --publish-file-folder-path ./ubuntu-test.sarif  --not-break-on-detections
+
+lint-test-job:   # This job also runs in the test stage.
+  stage: test    # It can run at the same time as unit-test-job (in parallel).
+  script:
+    - echo "Linting code... This will take about 10 seconds."
+    - sleep 10
+    - echo "No lint issues found."
+
+deploy-job:      # This job runs in the deploy stage.
+  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
+  environment: production
+  image: docker:stable
+  services:
+    - docker:dind
+  dependencies: 
+    - build-job
+  script:
+    - echo "Deploying application..."
+    - echo "Application successfully deployed."
+    - docker load -i image/my_docker_image:$CI_COMMIT_SHA.tar
+    - docker login sourabhmsdo.azurecr.io -u sourabhmsdo -p Gqi80ggwHi02838SA49iaBSIGzjw8YZIE7WGdZ9EWK+ACRDmnkPh
+    - docker tag my_docker_image:$CI_COMMIT_SHA sourabhmsdo.azurecr.io/my_docker_image:$CI_COMMIT_SHA
+    - docker push sourabhmsdo.azurecr.io/my_docker_image:$CI_COMMIT_SHA
